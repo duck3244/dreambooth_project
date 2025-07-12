@@ -1,0 +1,183 @@
+classDiagram
+    %% 메인 실행 클래스
+    class Main {
+        +parse_arguments()
+        +setup_environment()
+        +create_config_from_args()
+        +setup_mode()
+        +validate_mode()
+        +train_mode()
+        +test_mode()
+        +main()
+    }
+
+    %% 설정 관리
+    class DreamBoothConfig {
+        +str pretrained_model_name_or_path
+        +str instance_data_dir
+        +str output_dir
+        +str instance_prompt
+        +int resolution
+        +float learning_rate
+        +int max_train_steps
+        +bool use_8bit_adam
+        +bool gradient_checkpointing
+        +to_dict()
+        +get_env_vars()
+    }
+
+    class PresetConfigs {
+        +get_person_config()
+        +get_object_config()
+        +get_style_config()
+        +get_fast_config()
+        +get_high_quality_config()
+    }
+
+    %% 데이터셋 처리
+    class DreamBoothDataset {
+        +str instance_data_root
+        +str instance_prompt
+        +tokenizer
+        +int size
+        +_collect_images()
+        +_create_transforms()
+        +_load_and_preprocess_image()
+        +_tokenize_prompt()
+        +__getitem__()
+        +__len__()
+    }
+
+    class ImageValidator {
+        +validate_image()
+        +validate_dataset()
+    }
+
+    class DatasetUtils {
+        +create_dataloader()
+        +preview_dataset()
+        +analyze_dataset()
+    }
+
+    %% 모델 관리
+    class MemoryOptimizedModel {
+        +str model_name
+        +device
+        +tokenizer
+        +text_encoder
+        +vae
+        +unet
+        +scheduler
+        +load_components()
+        +enable_memory_optimization()
+        +prepare_for_training()
+        +save_checkpoint()
+        +load_checkpoint()
+        +create_pipeline()
+        +clear_memory()
+    }
+
+    class ModelOptimizer {
+        +get_8bit_adam_optimizer()
+        +calculate_memory_usage()
+        +optimize_for_8gb_vram()
+    }
+
+    class ModelValidator {
+        +validate_model_components()
+        +test_forward_pass()
+    }
+
+    class PipelineManager {
+        +str model_path
+        +pipeline
+        +load_pipeline()
+        +generate_image()
+        +batch_generate()
+    }
+
+    %% 학습 관리
+    class DreamBoothTrainer {
+        +DreamBoothConfig config
+        +int global_step
+        +accelerator
+        +model
+        +optimizer
+        +lr_scheduler
+        +setup_model()
+        +setup_optimizer_and_scheduler()
+        +setup_dataset()
+        +compute_loss()
+        +training_step()
+        +validate()
+        +generate_validation_images()
+        +save_checkpoint()
+        +train()
+        +save_final_model()
+    }
+
+    %% 유틸리티 클래스들
+    class ImageProcessor {
+        +resize_and_crop()
+        +enhance_image()
+        +remove_background()
+        +batch_process_images()
+    }
+
+    class SystemMonitor {
+        +get_system_info()
+        +monitor_training()
+        +plot_training_metrics()
+    }
+
+    class ModelTester {
+        +str model_path
+        +pipeline
+        +load_pipeline()
+        +test_generation()
+        +benchmark_performance()
+    }
+
+    class ProjectSetup {
+        +create_project_structure()
+        +check_requirements()
+        +install_requirements()
+    }
+
+    class ConfigValidator {
+        +validate_training_setup()
+    }
+
+    %% 관계 정의
+    Main --> DreamBoothConfig : uses
+    Main --> DreamBoothTrainer : creates
+    Main --> ModelTester : uses
+    Main --> ProjectSetup : uses
+    Main --> ConfigValidator : uses
+
+    PresetConfigs --> DreamBoothConfig : creates
+
+    DreamBoothTrainer --> DreamBoothConfig : uses
+    DreamBoothTrainer --> MemoryOptimizedModel : uses
+    DreamBoothTrainer --> DreamBoothDataset : uses
+    DreamBoothTrainer --> ModelOptimizer : uses
+    DreamBoothTrainer --> PipelineManager : uses
+
+    MemoryOptimizedModel --> ModelOptimizer : uses
+    MemoryOptimizedModel --> ModelValidator : uses
+    MemoryOptimizedModel --> PipelineManager : creates
+
+    DreamBoothDataset --> ImageValidator : uses
+    DreamBoothDataset --> DatasetUtils : uses
+    DreamBoothDataset --> ImageProcessor : uses
+
+    ModelTester --> PipelineManager : inherits from
+    ModelTester --> SystemMonitor : uses
+
+    %% 패키지 구조
+    note for Main "main.py\n메인 실행 파일"
+    note for DreamBoothConfig "config.py\n설정 관리"
+    note for DreamBoothDataset "dataset.py\n데이터셋 처리"
+    note for MemoryOptimizedModel "model.py\n모델 관리"
+    note for DreamBoothTrainer "trainer.py\n학습 관리"
+    note for ImageProcessor "utils.py\n유틸리티 함수들"

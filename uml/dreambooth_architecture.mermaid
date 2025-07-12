@@ -1,0 +1,130 @@
+graph TB
+    %% 사용자 인터페이스 레이어
+    subgraph "User Interface Layer"
+        CLI[Command Line Interface<br/>main.py]
+        ARGS[Argument Parser<br/>--mode, --preset, etc.]
+    end
+    
+    %% 설정 관리 레이어
+    subgraph "Configuration Layer"
+        CONFIG[DreamBoothConfig<br/>config.py]
+        PRESETS[Preset Configs<br/>person/object/style]
+        VALIDATOR[Config Validator<br/>validate settings]
+    end
+    
+    %% 데이터 처리 레이어
+    subgraph "Data Processing Layer"
+        DATASET[DreamBooth Dataset<br/>dataset.py]
+        IMGPROC[Image Processor<br/>resize/enhance/crop]
+        IMGVAL[Image Validator<br/>format/size check]
+        DATALOADER[Data Loader<br/>batch/shuffle/workers]
+    end
+    
+    %% 모델 관리 레이어
+    subgraph "Model Management Layer"
+        MODEL[Memory Optimized Model<br/>model.py]
+        UNET[UNet2D<br/>trainable component]
+        TEXTENC[Text Encoder<br/>frozen]
+        VAE[VAE<br/>frozen, loaded on demand]
+        TOKENIZER[CLIP Tokenizer<br/>text processing]
+    end
+    
+    %% 최적화 레이어
+    subgraph "Optimization Layer"
+        OPTIMIZER[8-bit Adam<br/>memory efficient]
+        SCHEDULER[Learning Rate Scheduler<br/>constant/cosine]
+        ACCELERATOR[Accelerate<br/>distributed training]
+        MEMORY[Memory Optimizations<br/>xformers/fp16/checkpointing]
+    end
+    
+    %% 학습 관리 레이어
+    subgraph "Training Management Layer"
+        TRAINER[DreamBooth Trainer<br/>trainer.py]
+        LOSS[Loss Computation<br/>MSE + prior preservation]
+        VALIDATION[Validation<br/>image generation]
+        CHECKPOINT[Checkpoint Manager<br/>save/load/cleanup]
+        LOGGING[Logger<br/>tensorboard/file logs]
+    end
+    
+    %% 유틸리티 레이어
+    subgraph "Utility Layer"
+        MONITOR[System Monitor<br/>GPU/CPU/memory]
+        TESTER[Model Tester<br/>benchmark/generation]
+        SETUP[Project Setup<br/>directory structure]
+        PIPELINE[Pipeline Manager<br/>inference pipeline]
+    end
+    
+    %% 연결 관계
+    CLI --> CONFIG
+    CLI --> TRAINER
+    CLI --> TESTER
+    CLI --> SETUP
+    
+    CONFIG --> PRESETS
+    CONFIG --> VALIDATOR
+    
+    TRAINER --> DATASET
+    TRAINER --> MODEL
+    TRAINER --> OPTIMIZER
+    TRAINER --> ACCELERATOR
+    TRAINER --> LOSS
+    TRAINER --> VALIDATION
+    TRAINER --> CHECKPOINT
+    TRAINER --> LOGGING
+    
+    DATASET --> IMGPROC
+    DATASET --> IMGVAL
+    DATASET --> DATALOADER
+    
+    MODEL --> UNET
+    MODEL --> TEXTENC
+    MODEL --> VAE
+    MODEL --> TOKENIZER
+    MODEL --> MEMORY
+    
+    OPTIMIZER --> SCHEDULER
+    
+    TESTER --> PIPELINE
+    TESTER --> MONITOR
+    
+    VALIDATION --> PIPELINE
+    
+    %% 8GB VRAM 최적화 표시
+    subgraph "8GB VRAM Optimizations"
+        OPT1[Batch Size = 1]
+        OPT2[Gradient Accumulation = 4]
+        OPT3[8-bit Adam Optimizer]
+        OPT4[Mixed Precision FP16]
+        OPT5[Gradient Checkpointing]
+        OPT6[xFormers Attention]
+        OPT7[Dynamic VAE Loading]
+        OPT8[Memory Cleanup]
+    end
+    
+    MEMORY -.-> OPT1
+    MEMORY -.-> OPT2
+    MEMORY -.-> OPT3
+    MEMORY -.-> OPT4
+    MEMORY -.-> OPT5
+    MEMORY -.-> OPT6
+    MEMORY -.-> OPT7
+    MEMORY -.-> OPT8
+    
+    %% 스타일링
+    classDef uiLayer fill:#e3f2fd
+    classDef configLayer fill:#f1f8e9
+    classDef dataLayer fill:#fff3e0
+    classDef modelLayer fill:#fce4ec
+    classDef optimLayer fill:#f3e5f5
+    classDef trainLayer fill:#e8f5e8
+    classDef utilLayer fill:#fff8e1
+    classDef optLayer fill:#ffebee
+    
+    class CLI,ARGS uiLayer
+    class CONFIG,PRESETS,VALIDATOR configLayer
+    class DATASET,IMGPROC,IMGVAL,DATALOADER dataLayer
+    class MODEL,UNET,TEXTENC,VAE,TOKENIZER modelLayer
+    class OPTIMIZER,SCHEDULER,ACCELERATOR,MEMORY optimLayer
+    class TRAINER,LOSS,VALIDATION,CHECKPOINT,LOGGING trainLayer
+    class MONITOR,TESTER,SETUP,PIPELINE utilLayer
+    class OPT1,OPT2,OPT3,OPT4,OPT5,OPT6,OPT7,OPT8 optLayer
