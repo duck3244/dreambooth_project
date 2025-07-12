@@ -1,0 +1,48 @@
+# DreamBooth Fine-tuning Requirements
+# RTX 4060 8GB VRAM Optimized
+
+# Core ML Libraries
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+
+# Diffusion Models
+diffusers[training]>=0.21.0
+transformers>=4.25.0
+accelerate>=0.20.0
+
+# Memory Optimization
+bitsandbytes>=0.35.0
+xformers>=0.0.20
+
+# Image Processing
+Pillow>=9.0.0
+opencv-python>=4.7.0
+
+# Data Handling
+numpy>=1.21.0
+pandas>=1.5.0
+
+# Monitoring and Visualization
+matplotlib>=3.5.0
+seaborn>=0.11.0
+tqdm>=4.64.0
+
+# System Monitoring
+psutil>=5.9.0
+GPUtil>=1.4.0
+
+# Utilities
+pathlib2>=2.3.6
+dataclasses>=0.6
+
+# Optional: Background Removal
+# rembg>=2.0.0
+
+# Optional: Advanced Image Processing
+# opencv-contrib-python>=4.7.0
+# scikit-image>=0.19.0
+
+# Development and Debugging
+# ipython>=8.0.0
+# jupyter>=1.0.0
