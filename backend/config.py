@@ -51,30 +51,47 @@ class DreamBoothConfig:
     use_8bit_adam: bool = True
     gradient_checkpointing: bool = True
     enable_xformers_memory_efficient_attention: bool = True
-    mixed_precision: str = "no"  # "fp16" 대신 "no" 사용
+    mixed_precision: str = "fp16"  # "fp16" | "bf16" | "no"
     prior_generation_precision: str = "fp32"
-    
+
+    # VAE / CPU offload 설정
+    enable_vae_slicing: bool = True
+    enable_vae_tiling: bool = False
+    cpu_offload_text_encoder: bool = False
+
+    # LoRA 설정
+    use_lora: bool = False
+    lora_rank: int = 4
+    lora_alpha: int = 4
+    lora_dropout: float = 0.0
+    lora_target_modules: tuple = ("to_q", "to_k", "to_v", "to_out.0")
+
     # Prior preservation 설정
     with_prior_preservation: bool = False
     prior_loss_weight: float = 1.0
     num_class_images: int = 100
-    
+
     # 기타 설정
     seed: int = 42
+    deterministic: bool = False
     local_rank: int = -1
     num_workers: int = 0
     logging_dir: str = "./logs"
-    
+
     # 8GB VRAM 최적화 설정
     max_memory_mb: int = 7500  # 8GB 중 7.5GB 사용
     
     def __post_init__(self):
         """설정 후 처리"""
+        # lora_target_modules: JSON/dict 역직렬화 후 list가 될 수 있어 tuple로 강제
+        if self.lora_target_modules is not None and not isinstance(self.lora_target_modules, tuple):
+            self.lora_target_modules = tuple(self.lora_target_modules)
+
         # 디렉토리 생성
         os.makedirs(self.instance_data_dir, exist_ok=True)
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs(self.logging_dir, exist_ok=True)
-        
+
         if self.with_prior_preservation:
             os.makedirs(self.class_data_dir, exist_ok=True)
     

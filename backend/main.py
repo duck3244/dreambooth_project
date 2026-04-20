@@ -58,16 +58,46 @@ def parse_arguments():
                        help="검증용 프롬프트")
     parser.add_argument("--seed", type=int, default=42,
                        help="랜덤 시드")
+    parser.add_argument("--deterministic", action="store_true",
+                       help="결정론적(deterministic) 모드 활성화 (재현성↑, 속도↓)")
     parser.add_argument("--with_prior_preservation", action="store_true",
                        help="Prior preservation 사용")
+
+    # 메모리 최적화
+    parser.add_argument("--mixed_precision", type=str, default=None,
+                       choices=["no", "fp16", "bf16"],
+                       help="Mixed precision 모드 (기본: config 값)")
+    parser.add_argument("--enable_vae_slicing", action="store_true", default=None,
+                       help="VAE slicing 활성화 (메모리 절약)")
+    parser.add_argument("--enable_vae_tiling", action="store_true", default=None,
+                       help="VAE tiling 활성화 (더 큰 해상도 지원)")
+    parser.add_argument("--cpu_offload_text_encoder", action="store_true", default=None,
+                       help="Text encoder를 CPU로 offload (프롬프트 임베딩 미리 계산)")
+
+    # LoRA
+    parser.add_argument("--use_lora", action="store_true",
+                       help="LoRA 어댑터 기반 학습 (메모리↓, 속도↑)")
+    parser.add_argument("--lora_rank", type=int, default=4,
+                       help="LoRA rank")
+    parser.add_argument("--lora_alpha", type=int, default=4,
+                       help="LoRA alpha")
+    parser.add_argument("--lora_dropout", type=float, default=0.0,
+                       help="LoRA dropout")
     
     # 테스트 모드 옵션
     parser.add_argument("--test_model_path", type=str, default="./dreambooth_output",
                        help="테스트할 모델 경로")
-    parser.add_argument("--test_prompts", type=str, nargs="+", 
+    parser.add_argument("--test_prompts", type=str, nargs="+",
                        default=["a photo of sks person"],
                        help="테스트용 프롬프트들")
-    
+
+    # 비대화형 실행 (서브프로세스/CI 용)
+    parser.add_argument("-y", "--yes", "--non-interactive", dest="yes",
+                       action="store_true",
+                       help="모든 확인 프롬프트를 자동 승인 (서브프로세스 실행용)")
+    parser.add_argument("--event_log_path", type=str, default=None,
+                       help="학습 이벤트를 기록할 JSONL 파일 경로 (옵션)")
+
     return parser.parse_args()
 
 
@@ -110,12 +140,29 @@ def create_config_from_args(args):
     config.max_train_steps = args.max_train_steps
     config.resolution = args.resolution
     config.seed = args.seed
+    config.deterministic = args.deterministic
     config.with_prior_preservation = args.with_prior_preservation
     config.resume_from_checkpoint = args.resume_from_checkpoint
-    
+
+    # 메모리 최적화 오버라이드 (None이 아닐 때만)
+    if args.mixed_precision is not None:
+        config.mixed_precision = args.mixed_precision
+    if args.enable_vae_slicing is not None:
+        config.enable_vae_slicing = args.enable_vae_slicing
+    if args.enable_vae_tiling is not None:
+        config.enable_vae_tiling = args.enable_vae_tiling
+    if args.cpu_offload_text_encoder is not None:
+        config.cpu_offload_text_encoder = args.cpu_offload_text_encoder
+
+    # LoRA 설정
+    config.use_lora = args.use_lora
+    config.lora_rank = args.lora_rank
+    config.lora_alpha = args.lora_alpha
+    config.lora_dropout = args.lora_dropout
+
     if args.validation_prompt:
         config.validation_prompt = args.validation_prompt
-    
+
     return config
 
 
@@ -256,15 +303,21 @@ def train_mode(args):
                    if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff'))]
     print(f"  Training images: {len(image_files)}")
     
-    # 사용자 확인
-    response = input("\nProceed with training? (y/N): ")
-    if response.lower() != 'y':
-        print("Training cancelled.")
-        return False
-    
+    # 사용자 확인 (--yes가 주어지면 스킵)
+    if not getattr(args, "yes", False):
+        response = input("\nProceed with training? (y/N): ")
+        if response.lower() != 'y':
+            print("Training cancelled.")
+            return False
+    else:
+        print("\n[non-interactive] Proceeding with training automatically.")
+
     # 학습 시작
     try:
-        trainer = DreamBoothTrainer(config)
+        trainer = DreamBoothTrainer(
+            config,
+            event_log_path=getattr(args, "event_log_path", None),
+        )
         
         # 체크포인트에서 재시작 (지정된 경우)
         if config.resume_from_checkpoint:
@@ -348,16 +401,16 @@ def test_model(model_path: str, prompts: list):
         print(f"Test failed: {e}")
 
 
-def process_images_if_needed(instance_data_dir: str):
+def process_images_if_needed(instance_data_dir: str, non_interactive: bool = False):
     """필요한 경우 이미지 전처리"""
     # 이미지 파일 확인
-    image_files = [f for f in os.listdir(instance_data_dir) 
+    image_files = [f for f in os.listdir(instance_data_dir)
                    if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff'))]
-    
+
     if not image_files:
         print(f"❌ No images found in {instance_data_dir}")
         return False
-    
+
     # 이미지 크기 체크
     need_processing = False
     for img_file in image_files:
@@ -371,11 +424,15 @@ def process_images_if_needed(instance_data_dir: str):
         except Exception:
             need_processing = True
             break
-    
+
     if need_processing:
         print("Some images need preprocessing...")
-        response = input("Auto-resize images to 512x512? (y/N): ")
-        
+        if non_interactive:
+            response = "y"
+            print("[non-interactive] Auto-resizing images to 512x512.")
+        else:
+            response = input("Auto-resize images to 512x512? (y/N): ")
+
         if response.lower() == 'y':
             # 백업 디렉토리 생성
             backup_dir = instance_data_dir + "_backup"
@@ -419,9 +476,10 @@ def main():
     elif args.mode == "train":
         # 이미지 전처리 확인
         if os.path.exists(args.instance_data_dir):
-            if not process_images_if_needed(args.instance_data_dir):
+            if not process_images_if_needed(args.instance_data_dir,
+                                             non_interactive=getattr(args, "yes", False)):
                 sys.exit(1)
-        
+
         success = train_mode(args)
     
     elif args.mode == "test":

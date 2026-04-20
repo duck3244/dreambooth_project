@@ -15,7 +15,7 @@ from diffusers import (
     LMSDiscreteScheduler
 )
 from transformers import CLIPTextModel, CLIPTokenizer
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Iterable, List
 import os
 import gc
 from pathlib import Path
@@ -23,21 +23,24 @@ from pathlib import Path
 
 class MemoryOptimizedModel:
     """메모리 최적화된 모델 관리 클래스"""
-    
+
     def __init__(self, model_name: str = "runwayml/stable-diffusion-v1-5"):
         self.model_name = model_name
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
         # 모델 컴포넌트
         self.tokenizer = None
         self.text_encoder = None
         self.vae = None
         self.unet = None
         self.scheduler = None
-        
+
         # 메모리 최적화 플래그
         self.xformers_enabled = False
+        self.sdpa_enabled = False
+        self.attention_slicing_enabled = False
         self.gradient_checkpointing_enabled = False
+        self.lora_enabled = False
         
     def load_components(self, load_vae: bool = True) -> None:
         """모델 컴포넌트 로드"""
@@ -84,55 +87,133 @@ class MemoryOptimizedModel:
         print("Model components loaded successfully!")
     
     def enable_memory_optimization(self) -> None:
-        """메모리 최적화 활성화"""
+        """메모리 최적화 활성화 (precision 캐스팅은 별도 단계에서 수행)"""
         print("Enabling memory optimizations...")
-        
+
         # Gradient checkpointing
         if hasattr(self.unet, 'enable_gradient_checkpointing'):
             self.unet.enable_gradient_checkpointing()
             self.gradient_checkpointing_enabled = True
             print("✓ UNet gradient checkpointing enabled")
-        
+
         if hasattr(self.text_encoder, 'gradient_checkpointing_enable'):
             self.text_encoder.gradient_checkpointing_enable()
             print("✓ Text encoder gradient checkpointing enabled")
-        
-        # xFormers 최적화
-        try:
-            self.unet.enable_xformers_memory_efficient_attention()
-            self.xformers_enabled = True
-            print("✓ xFormers memory efficient attention enabled")
-        except Exception as e:
-            print(f"✗ xFormers not available: {e}")
-        
-        # 혼합 정밀도 설정 - 일관성 있게 적용
-        if self.device.type == 'cuda':
-            # 모든 모델을 동일한 precision으로 설정
-            try:
-                self.unet = self.unet.to(dtype=torch.float16)
-                self.text_encoder = self.text_encoder.to(dtype=torch.float16)
-                if self.vae is not None:
-                    self.vae = self.vae.to(dtype=torch.float16)
-                print("✓ Mixed precision (fp16) enabled for all components")
-            except Exception as e:
-                print(f"✗ Mixed precision failed, using fp32: {e}")
-                # FP32로 폴백
-                self.unet = self.unet.to(dtype=torch.float32)
-                self.text_encoder = self.text_encoder.to(dtype=torch.float32)
-                if self.vae is not None:
-                    self.vae = self.vae.to(dtype=torch.float32)
-                print("✓ Using FP32 precision for stability")
+
+        # Attention 최적화: xFormers → SDPA → attention slicing 순 fallback
+        self._apply_attention_optimization()
 
         # CUDA 설정 최적화
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         print("✓ TF32 enabled for CUDA operations")
 
+    def _apply_attention_optimization(self) -> None:
+        """Attention 최적화 fallback chain: xFormers → SDPA → slicing"""
+        # 1) xFormers
+        try:
+            self.unet.enable_xformers_memory_efficient_attention()
+            self.xformers_enabled = True
+            print("✓ xFormers memory efficient attention enabled")
+            return
+        except Exception as e:
+            print(f"✗ xFormers not available: {e}")
+
+        # 2) PyTorch 2.0 SDPA
+        try:
+            from diffusers.models.attention_processor import AttnProcessor2_0
+            self.unet.set_attn_processor(AttnProcessor2_0())
+            self.sdpa_enabled = True
+            print("✓ PyTorch SDPA (AttnProcessor2_0) enabled")
+            return
+        except Exception as e:
+            print(f"✗ SDPA not available: {e}")
+
+        # 3) Attention slicing (최후 수단)
+        try:
+            if hasattr(self.unet, 'set_attention_slice'):
+                self.unet.set_attention_slice("auto")
+                self.attention_slicing_enabled = True
+                print("✓ Attention slicing enabled (fallback)")
+        except Exception as e:
+            print(f"✗ Attention slicing failed: {e}")
+
+    def enable_vae_optimizations(self, slicing: bool = True, tiling: bool = False) -> None:
+        """VAE 슬라이싱/타일링 활성화 (메모리 절약)"""
+        if self.vae is None:
+            return
+        if slicing and hasattr(self.vae, 'enable_slicing'):
+            self.vae.enable_slicing()
+            print("✓ VAE slicing enabled")
+        if tiling and hasattr(self.vae, 'enable_tiling'):
+            self.vae.enable_tiling()
+            print("✓ VAE tiling enabled")
+
+    def cast_frozen_components(self, weight_dtype: torch.dtype) -> None:
+        """동결된 컴포넌트(VAE, text_encoder)만 지정 dtype으로 캐스팅.
+        UNet은 FP32 유지. LoRA 모드에서는 UNet 베이스 가중치만 캐스팅하고
+        어댑터는 FP32로 남겨둠."""
+        if weight_dtype == torch.float32:
+            return
+        if self.vae is not None:
+            self.vae = self.vae.to(dtype=weight_dtype)
+        if self.text_encoder is not None:
+            self.text_encoder = self.text_encoder.to(dtype=weight_dtype)
+        if self.lora_enabled:
+            self._cast_unet_base_to_dtype(weight_dtype)
+        print(f"✓ Frozen components cast to {weight_dtype}")
+
+    def _cast_unet_base_to_dtype(self, weight_dtype: torch.dtype) -> None:
+        """LoRA 사용 시 UNet 베이스 가중치만 weight_dtype로, LoRA 어댑터는 FP32 유지"""
+        for name, param in self.unet.named_parameters():
+            if param.requires_grad:
+                # LoRA 어댑터 파라미터 - FP32 유지
+                continue
+            param.data = param.data.to(dtype=weight_dtype)
+
+    def apply_lora(
+        self,
+        rank: int = 4,
+        alpha: int = 4,
+        dropout: float = 0.0,
+        target_modules: Optional[Iterable[str]] = None,
+    ) -> None:
+        """UNet에 LoRA 어댑터 주입. 베이스 가중치는 동결, 어댑터만 학습."""
+        from peft import LoraConfig
+
+        if target_modules is None:
+            target_modules = ["to_q", "to_k", "to_v", "to_out.0"]
+
+        # 베이스 가중치 동결
+        self.unet.requires_grad_(False)
+
+        lora_config = LoraConfig(
+            r=rank,
+            lora_alpha=alpha,
+            lora_dropout=dropout,
+            init_lora_weights="gaussian",
+            target_modules=list(target_modules),
+        )
+
+        # diffusers 0.25+ 의 add_adapter 사용; fallback으로 peft 직접 주입
+        if hasattr(self.unet, 'add_adapter'):
+            self.unet.add_adapter(lora_config)
+        else:
+            from peft import inject_adapter_in_model
+            inject_adapter_in_model(lora_config, self.unet)
+
+        self.lora_enabled = True
+
+        trainable = sum(p.numel() for p in self.unet.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in self.unet.parameters())
+        print(f"✓ LoRA applied (rank={rank}, alpha={alpha}): "
+              f"{trainable:,} / {total:,} params trainable ({100*trainable/total:.2f}%)")
+
     def prepare_for_training(self) -> None:
-        """학습 준비"""
-        # UNet만 학습 모드로 설정
+        """학습 준비. LoRA 모드에서는 apply_lora()가 UNet requires_grad를 재설정."""
         self.unet.train()
-        self.unet.requires_grad_(True)
+        if not self.lora_enabled:
+            self.unet.requires_grad_(True)
 
         # 다른 컴포넌트는 평가 모드
         self.text_encoder.eval()
@@ -142,28 +223,32 @@ class MemoryOptimizedModel:
             self.vae.eval()
             self.vae.requires_grad_(False)
 
-        print("Model prepared for training (UNet only)")
+        print("Model prepared for training")
 
-    def get_trainable_parameters(self) -> torch.nn.Parameter:
-        """학습 가능한 파라미터 반환"""
-        return self.unet.parameters()
+    def get_trainable_parameters(self) -> List[torch.nn.Parameter]:
+        """학습 가능한 파라미터 반환. LoRA 모드에서는 어댑터 파라미터만."""
+        return [p for p in self.unet.parameters() if p.requires_grad]
 
     def save_checkpoint(self, output_dir: str, step: int) -> None:
-        """체크포인트 저장"""
+        """체크포인트 저장 (LoRA 모드는 어댑터 가중치만 저장)"""
         checkpoint_dir = Path(output_dir) / f"checkpoint-{step}"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        # UNet 저장
-        self.unet.save_pretrained(checkpoint_dir / "unet")
+        if self.lora_enabled:
+            from peft.utils import get_peft_model_state_dict
+            lora_state_dict = get_peft_model_state_dict(self.unet)
+            torch.save(lora_state_dict, checkpoint_dir / "pytorch_lora_weights.bin")
+        else:
+            self.unet.save_pretrained(checkpoint_dir / "unet")
 
-        # 메타데이터 저장
         metadata = {
             "step": step,
             "model_name": self.model_name,
             "xformers_enabled": self.xformers_enabled,
-            "gradient_checkpointing_enabled": self.gradient_checkpointing_enabled
+            "sdpa_enabled": self.sdpa_enabled,
+            "gradient_checkpointing_enabled": self.gradient_checkpointing_enabled,
+            "lora_enabled": self.lora_enabled,
         }
-
         torch.save(metadata, checkpoint_dir / "metadata.pt")
         print(f"Checkpoint saved to {checkpoint_dir}")
 

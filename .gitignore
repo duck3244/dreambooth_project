@@ -150,3 +150,28 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# ---------- DreamBooth project ----------
+
+# API runtime state (datasets, training jobs, inference jobs, weights).
+# Can reach tens of GB — never commit.
+backend/api/data/
+
+# Legacy CLI training outputs (pipeline weights, logs, metrics plots).
+backend/dreambooth_output/
+backend/logs/
+backend/test_outputs/
+backend/test_results/
+
+# User-supplied training images and local backups.
+backend/instance_images/
+backend/instance_images_backup/
+
+# Frontend build / dep artifacts.
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# HuggingFace / Diffusers caches (if the user exports them into the repo).
+.cache/huggingface/
+huggingface_cache/
